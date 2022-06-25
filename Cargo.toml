@@ -1,0 +1,11 @@
+[package]
+name = "paulstretch_rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "3.1.*", features = ["derive"] }
+rand = "0.8.*"
+realfft = "3.0.*"
+rustfft = "6.0.*"
+wav = "1.0.*"
