@@ -66,6 +66,7 @@ pub fn paulstretch(
     sample_rate: u32,
     window_size_secs: f32,
     stretch_factor: f32,
+    indicate_progress: impl Fn(u32, u32),
 ) -> Vec<f32> {
     println!("initialising...");
 
@@ -113,9 +114,15 @@ pub fn paulstretch(
     let uniform = Uniform::new(0_f32, 2_f32 * PI);
     let mut rng = rand::thread_rng();
 
+    // progress counter
+    let mut iters = 0;
+    let max_iters = (samples.len() as f32 / step) as u32;
+
     println!("processing...");
 
     loop {
+        indicate_progress(iters, max_iters);
+
         // grab window_size samples and pad with zeros if there aren't enough left
         let remaining = samples.len() - start as usize;
         if remaining > window_size {
@@ -179,6 +186,8 @@ pub fn paulstretch(
         }
 
         output.extend_from_slice(&out);
+
+        iters += 1;
     }
 }
 

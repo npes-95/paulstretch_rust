@@ -3,6 +3,8 @@ use paulstretch_rust::wav_helper;
 
 use clap::Parser;
 
+use std::io::Write;
+
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 struct Args {
@@ -15,6 +17,30 @@ struct Args {
 
     #[clap(short, default_value_t = 0.25)]
     window_size_secs: f32,
+}
+
+fn print_progress(current: u32, total: u32) {
+    let ratio = current as f32 / total as f32;
+    let percent = 100_f32 * ratio;
+    let width = 30;
+    let num_blocks = (width as f32 * ratio) as u32;
+
+    print!("\r");
+    print!("[");
+    for _ in 0..num_blocks {
+        print!("=");
+    }
+    for _ in 0..width - num_blocks {
+        print!(" ");
+    }
+    print!("]");
+    print!(" {}%", percent as u32);
+
+    if num_blocks == width {
+        print!("\n");
+    }
+
+    std::io::stdout().flush().unwrap();
 }
 
 fn main() {
@@ -31,6 +57,7 @@ fn main() {
         header.sampling_rate,
         args.window_size_secs,
         args.stretch_factor,
+        print_progress,
     );
 
     println!("exporting...");
