@@ -88,8 +88,6 @@ pub fn paulstretch(
     stretch_factor: f32,
     indicate_progress: &impl Fn(u32, u32),
 ) -> Vec<f32> {
-    println!("initialising...");
-
     // correct end size of data
     let end_size = compute_end_size(sample_rate);
     let linspace = compute_linspace(0_f32, 1_f32, end_size);
@@ -137,8 +135,6 @@ pub fn paulstretch(
     // progress counter
     let mut iters = 0;
     let max_iters = (samples.len() as f32 / step) as u32;
-
-    println!("processing...");
 
     loop {
         indicate_progress(iters, max_iters);
@@ -201,7 +197,6 @@ pub fn paulstretch(
         start += step;
 
         if start as usize >= samples.len() {
-            println!("done!");
             return output;
         }
 

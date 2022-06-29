@@ -52,6 +52,8 @@ fn main() {
         header.bits_per_sample, header.sampling_rate
     );
 
+    println!("processing...");
+
     let stretched = paulstretch_multichannel(
         samples,
         header.sampling_rate,
@@ -60,6 +62,9 @@ fn main() {
         &print_progress,
     );
 
+    println!("done!");
+
     println!("exporting...");
+
     wav_helper::export(&args.out_name, header, stretched).unwrap();
 }
