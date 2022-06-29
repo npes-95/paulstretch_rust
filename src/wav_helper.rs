@@ -4,17 +4,50 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
-pub fn load(path: &str) -> io::Result<(Header, Vec<f32>)> {
+pub fn load(path: &str) -> io::Result<(Header, Vec<Vec<f32>>)> {
     let mut f = File::open(Path::new(path))?;
     let (header, data) = wav::read(&mut f)?;
     let samples = to_bounded_f32(data);
-    Ok((header, samples))
+    Ok((header, uninterleave(samples, header.channel_count)))
 }
 
-pub fn export(path: &str, header: Header, samples: Vec<f32>) -> io::Result<()> {
-    let data = from_bounded_f32(header, samples);
+pub fn export(path: &str, header: Header, samples: Vec<Vec<f32>>) -> io::Result<()> {
+    let data = from_bounded_f32(header, interleave(samples));
     let mut f = File::create(Path::new(path))?;
     wav::write(header, &data, &mut f)
+}
+
+fn interleave(input: Vec<Vec<f32>>) -> Vec<f32> {
+    match input.len() {
+        1 => input[0].clone(),
+        2 => {
+            let mut out = Vec::with_capacity(2 * input[0].len());
+            for frame in input[0].iter().zip(input[1].iter()) {
+                out.push(*frame.0);
+                out.push(*frame.1);
+            }
+            out
+        }
+        _ => panic!(),
+    }
+}
+
+fn uninterleave(input: Vec<f32>, channels: u16) -> Vec<Vec<f32>> {
+    match channels {
+        1 => vec![input],
+        2 => {
+            let mut out = vec![
+                Vec::with_capacity(input.len() / 2),
+                Vec::with_capacity(input.len() / 2),
+            ];
+            for frame in input.chunks(2) {
+                out[0].push(frame[0]);
+                out[1].push(frame[1]);
+            }
+            out
+        }
+        _ => panic!(),
+    }
 }
 
 fn to_bounded_f32(data: BitDepth) -> Vec<f32> {
@@ -104,5 +137,59 @@ mod tests {
         let samples_max = to_bounded_f32(data_max);
         assert!(samples_min[0] >= -1_f32);
         assert!(samples_max[0] <= 1_f32);
+    }
+
+    #[test]
+    #[should_panic]
+    fn interleave_empty() {
+        interleave(vec![]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn uninterleave_empty() {
+        uninterleave(vec![], 0);
+    }
+
+    #[test]
+    fn interleave_mono() {
+        let v = vec![vec![0_f32, 1_f32, 2_f32]];
+        assert_eq!(interleave(v), vec![0_f32, 1_f32, 2_f32]);
+    }
+
+    #[test]
+    fn uninterleave_mono() {
+        let v = vec![0_f32, 1_f32, 2_f32];
+        assert_eq!(uninterleave(v, 1), vec![vec![0_f32, 1_f32, 2_f32]]);
+    }
+
+    #[test]
+    fn interleave_stereo() {
+        let v = vec![vec![0_f32, 1_f32, 2_f32], vec![3_f32, 4_f32, 5_f32]];
+        assert_eq!(
+            interleave(v),
+            vec![0_f32, 3_f32, 1_f32, 4_f32, 2_f32, 5_f32]
+        );
+    }
+
+    #[test]
+    fn uninterleave_stereo() {
+        let v = vec![0_f32, 3_f32, 1_f32, 4_f32, 2_f32, 5_f32];
+        assert_eq!(
+            uninterleave(v, 2),
+            vec![vec![0_f32, 1_f32, 2_f32], vec![3_f32, 4_f32, 5_f32]]
+        );
+    }
+
+    #[test]
+    #[should_panic]
+    fn interleave_multichannel() {
+        interleave(vec![vec![], vec![], vec![]]);
+    }
+
+    #[test]
+    #[should_panic]
+    fn uninterleave_multichannel() {
+        uninterleave(vec![], 3);
     }
 }

@@ -1,4 +1,4 @@
-use paulstretch_rust::stretch::paulstretch;
+use paulstretch_rust::stretch::paulstretch_multichannel;
 use paulstretch_rust::wav_helper;
 
 use clap::Parser;
@@ -52,12 +52,12 @@ fn main() {
         header.bits_per_sample, header.sampling_rate
     );
 
-    let stretched = paulstretch(
+    let stretched = paulstretch_multichannel(
         samples,
         header.sampling_rate,
         args.window_size_secs,
         args.stretch_factor,
-        print_progress,
+        &print_progress,
     );
 
     println!("exporting...");

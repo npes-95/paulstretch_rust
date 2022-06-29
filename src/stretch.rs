@@ -61,12 +61,32 @@ fn overlap_add(current: &Vec<f32>, prev: &Vec<f32>, added: &mut Vec<f32>) {
     }
 }
 
+pub fn paulstretch_multichannel(
+    mut samples: Vec<Vec<f32>>,
+    sample_rate: u32,
+    window_size_secs: f32,
+    stretch_factor: f32,
+    indicate_progress: &impl Fn(u32, u32),
+) -> Vec<Vec<f32>> {
+    let mut out = Vec::with_capacity(samples.len());
+    for channel in samples.drain(..) {
+        out.push(paulstretch(
+            channel,
+            sample_rate,
+            window_size_secs,
+            stretch_factor,
+            indicate_progress,
+        ))
+    }
+    out
+}
+
 pub fn paulstretch(
     mut samples: Vec<f32>,
     sample_rate: u32,
     window_size_secs: f32,
     stretch_factor: f32,
-    indicate_progress: impl Fn(u32, u32),
+    indicate_progress: &impl Fn(u32, u32),
 ) -> Vec<f32> {
     println!("initialising...");
 
