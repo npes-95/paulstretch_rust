@@ -45,18 +45,18 @@ fn print_progress(current: u32, total: u32) {
 
 fn main() {
     let args = Args::parse();
-    let (header, samples) = wav_helper::load(&args.in_name).unwrap();
+    let wave = wav_helper::load(&args.in_name).unwrap();
 
     println!(
         "loaded file (bit_depth: {}, sample_rate: {})",
-        header.bits_per_sample, header.sampling_rate
+        wave.header.bit_depth, wave.header.sample_rate
     );
 
     println!("processing...");
 
     let stretched = paulstretch_multichannel(
-        samples,
-        header.sampling_rate,
+        wave.data,
+        wave.header.sample_rate,
         args.window_size_secs,
         args.stretch_factor,
         &print_progress,
@@ -66,5 +66,12 @@ fn main() {
 
     println!("exporting...");
 
-    wav_helper::export(&args.out_name, header, stretched).unwrap();
+    wav_helper::export(
+        &args.out_name,
+        wav_helper::Wave {
+            header: wave.header,
+            data: stretched,
+        },
+    )
+    .unwrap();
 }

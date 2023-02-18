@@ -1,40 +1,128 @@
-use wav::{bit_depth::BitDepth, header::Header};
+use hound;
 
-use std::fs::File;
-use std::io;
-use std::path::Path;
+use std::error::Error;
 
-pub fn load(path: &str) -> io::Result<(Header, Vec<Vec<f32>>)> {
-    let mut f = File::open(Path::new(path))?;
-    let (header, data) = wav::read(&mut f)?;
-    let samples = to_bounded_f32(data);
-    Ok((header, uninterleave(samples, header.channel_count)))
+#[derive(Debug)]
+pub enum Format {
+    Float,
+    Int,
 }
 
-pub fn export(path: &str, header: Header, samples: Vec<Vec<f32>>) -> io::Result<()> {
-    let data = from_bounded_f32(header, interleave(samples));
-    let mut f = File::create(Path::new(path))?;
-    wav::write(header, &data, &mut f)
+#[derive(Debug)]
+pub struct WaveHeader {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub bit_depth: u16,
+    pub format: Format,
 }
 
-fn interleave(input: Vec<Vec<f32>>) -> Vec<f32> {
+#[derive(Debug)]
+pub struct Wave {
+    pub header: WaveHeader,
+    pub data: Vec<Vec<f32>>,
+}
+
+pub fn load(path: &str) -> Result<Wave, Box<dyn Error>> {
+    let mut r = hound::WavReader::open(path)?;
+    let spec = r.spec();
+
+    let header = WaveHeader {
+        channels: spec.channels,
+        sample_rate: spec.sample_rate,
+        bit_depth: spec.bits_per_sample,
+        format: match spec.sample_format {
+            hound::SampleFormat::Float => Format::Float,
+            hound::SampleFormat::Int => Format::Int,
+        },
+    };
+
+    let interleaved_data: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => r.samples::<f32>().map(|s| s.unwrap()).collect(),
+
+        hound::SampleFormat::Int => match spec.bits_per_sample {
+            8 => r
+                .samples::<i8>()
+                .map(|s| (s.unwrap() as f32 / i8::MAX as f32))
+                .collect(),
+            16 => r
+                .samples::<i16>()
+                .map(|s| s.unwrap() as f32 / i16::MAX as f32)
+                .collect(),
+
+            24 => r
+                .samples::<i32>()
+                .map(|s| s.unwrap() as f32 / 0x7FFFFF as f32)
+                .collect(),
+
+            32 => r
+                .samples::<i32>()
+                .map(|s| s.unwrap() as f32 / i32::MAX as f32)
+                .collect(),
+            _ => {
+                return Err(format!("Unrecognised bit depth: got {}", spec.bits_per_sample).into())
+            }
+        },
+    };
+
+    Ok(Wave {
+        header,
+        data: uninterleave(interleaved_data, spec.channels)?,
+    })
+}
+
+pub fn export(path: &str, wave: Wave) -> Result<(), Box<dyn Error>> {
+    let spec = hound::WavSpec {
+        channels: wave.header.channels,
+        sample_rate: wave.header.sample_rate,
+        bits_per_sample: wave.header.bit_depth,
+        sample_format: match wave.header.format {
+            Format::Float => hound::SampleFormat::Float,
+            Format::Int => hound::SampleFormat::Int,
+        },
+    };
+
+    let mut w = hound::WavWriter::create(path, spec)?;
+
+    // TODO: figure out if there's a more efficient way to do this, not nice to have to match every sample
+    for s in interleave(wave.data)? {
+        match wave.header.format {
+            Format::Float => w.write_sample(s)?,
+            Format::Int => match wave.header.bit_depth {
+                8 => w.write_sample((s * i8::MAX as f32) as i8)?,
+                16 => w.write_sample((s * i16::MAX as f32) as i16)?,
+                24 => w.write_sample((s * 0x7FFFFF as f32) as i32)?,
+                32 => w.write_sample((s * i32::MAX as f32) as i32)?,
+                _ => {
+                    return Err(
+                        format!("Unrecognised bit depth: got {}", spec.bits_per_sample).into(),
+                    )
+                }
+            },
+        };
+    }
+
+    w.finalize()?;
+    Ok(())
+}
+
+fn interleave(input: Vec<Vec<f32>>) -> Result<Vec<f32>, Box<dyn Error>> {
     match input.len() {
-        1 => input[0].clone(),
+        1 => Ok(input[0].clone()),
         2 => {
             let mut out = Vec::with_capacity(2 * input[0].len());
             for frame in input[0].iter().zip(input[1].iter()) {
                 out.push(*frame.0);
                 out.push(*frame.1);
             }
-            out
+            Ok(out)
         }
-        _ => panic!(),
+        _ => return Err(format!("Unsupported number of channels ({})", input.len()).into()),
     }
 }
 
-fn uninterleave(input: Vec<f32>, channels: u16) -> Vec<Vec<f32>> {
+fn uninterleave(input: Vec<f32>, channels: u16) -> Result<Vec<Vec<f32>>, Box<dyn Error>> {
     match channels {
-        1 => vec![input],
+        1 => Ok(vec![input]),
         2 => {
             let mut out = vec![
                 Vec::with_capacity(input.len() / 2),
@@ -44,152 +132,70 @@ fn uninterleave(input: Vec<f32>, channels: u16) -> Vec<Vec<f32>> {
                 out[0].push(frame[0]);
                 out[1].push(frame[1]);
             }
-            out
+            Ok(out)
         }
-        _ => panic!(),
-    }
-}
-
-fn to_bounded_f32(data: BitDepth) -> Vec<f32> {
-    match data {
-        BitDepth::Eight(s) => s
-            .iter()
-            .map(|s| *s as f32 * (2_f32 / u8::MAX as f32) - 1_f32)
-            .collect(),
-        BitDepth::Sixteen(s) => s
-            .iter()
-            .map(|s| *s.clamp(&-i16::MAX, &i16::MAX) as f32 / i16::MAX as f32)
-            .collect(),
-        BitDepth::TwentyFour(s) => s.iter().map(|s| *s as f32 / 0x7FFFFF as f32).collect(),
-        BitDepth::ThirtyTwoFloat(s) => s,
-        _ => panic!(),
-    }
-}
-
-fn from_bounded_f32(header: Header, samples: Vec<f32>) -> BitDepth {
-    match header.bits_per_sample {
-        8 => BitDepth::Eight(
-            samples
-                .iter()
-                .map(|s| (((s + 1_f32) / 2_f32) * u8::MAX as f32) as u8)
-                .collect(),
-        ),
-        16 => BitDepth::Sixteen(
-            samples
-                .iter()
-                .map(|s| (s * i16::MAX as f32) as i16)
-                .collect(),
-        ),
-        24 => BitDepth::TwentyFour(
-            samples
-                .iter()
-                .map(|s| (s * 0x7FFFFF as f32) as i32)
-                .collect(),
-        ),
-        32 => BitDepth::ThirtyTwoFloat(samples),
-        _ => panic!(),
+        _ => return Err(format!("Unsupported number of channels ({})", input.len()).into()),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    // TODO: reimplement get_min and get_max
-    // TODO: fill vector with random data and check bounds
-    // TODO: refactor and make generic
+    use super::{interleave, uninterleave};
 
     #[test]
-    fn u8_to_f32() {
-        let data_min = BitDepth::Eight(vec![u8::MIN; 1]);
-        let data_max = BitDepth::Eight(vec![u8::MAX; 1]);
-        let samples_min = to_bounded_f32(data_min);
-        let samples_max = to_bounded_f32(data_max);
-        assert!(samples_min[0] >= -1_f32);
-        assert!(samples_max[0] <= 1_f32);
-    }
-
-    #[test]
-    fn i16_to_f32() {
-        let data_min = BitDepth::Sixteen(vec![i16::MIN; 1]);
-        let data_max = BitDepth::Sixteen(vec![i16::MAX; 1]);
-        let samples_min = to_bounded_f32(data_min);
-        let samples_max = to_bounded_f32(data_max);
-        assert!(samples_min[0] >= -1_f32);
-        assert!(samples_max[0] <= 1_f32);
-    }
-
-    #[test]
-    fn i24_to_f32() {
-        let data_min = BitDepth::TwentyFour(vec![-0x7FFFFF_i32; 1]);
-        let data_max = BitDepth::TwentyFour(vec![0x7FFFFF_i32; 1]);
-        let samples_min = to_bounded_f32(data_min);
-        let samples_max = to_bounded_f32(data_max);
-        assert!(samples_min[0] >= -1_f32);
-        assert!(samples_max[0] <= 1_f32);
-    }
-
-    #[test]
-    fn f32_to_f32() {
-        let data_min = BitDepth::ThirtyTwoFloat(vec![-1_f32; 1]);
-        let data_max = BitDepth::ThirtyTwoFloat(vec![1_f32; 1]);
-        let samples_min = to_bounded_f32(data_min);
-        let samples_max = to_bounded_f32(data_max);
-        assert!(samples_min[0] >= -1_f32);
-        assert!(samples_max[0] <= 1_f32);
-    }
-
-    #[test]
-    #[should_panic]
     fn interleave_empty() {
-        interleave(vec![]);
-    }
-
-    #[test]
-    #[should_panic]
-    fn uninterleave_empty() {
-        uninterleave(vec![], 0);
+        assert!(interleave(vec![]).is_err());
     }
 
     #[test]
     fn interleave_mono() {
         let v = vec![vec![0_f32, 1_f32, 2_f32]];
-        assert_eq!(interleave(v), vec![0_f32, 1_f32, 2_f32]);
-    }
-
-    #[test]
-    fn uninterleave_mono() {
-        let v = vec![0_f32, 1_f32, 2_f32];
-        assert_eq!(uninterleave(v, 1), vec![vec![0_f32, 1_f32, 2_f32]]);
+        let interleaved = interleave(v);
+        assert!(interleaved.is_ok());
+        assert_eq!(interleaved.unwrap(), vec![0_f32, 1_f32, 2_f32]);
     }
 
     #[test]
     fn interleave_stereo() {
         let v = vec![vec![0_f32, 1_f32, 2_f32], vec![3_f32, 4_f32, 5_f32]];
+        let interleaved = interleave(v);
+        assert!(interleaved.is_ok());
         assert_eq!(
-            interleave(v),
+            interleaved.unwrap(),
             vec![0_f32, 3_f32, 1_f32, 4_f32, 2_f32, 5_f32]
         );
     }
 
     #[test]
+    fn interleave_multichannel() {
+        assert!(interleave(vec![vec![], vec![], vec![]]).is_err());
+    }
+
+    #[test]
+    fn uninterleave_empty() {
+        assert!(uninterleave(vec![], 0).is_err());
+    }
+
+    #[test]
+    fn uninterleave_mono() {
+        let v = vec![0_f32, 1_f32, 2_f32];
+        let uninterleaved = uninterleave(v, 1);
+        assert!(uninterleaved.is_ok());
+        assert_eq!(uninterleaved.unwrap(), vec![vec![0_f32, 1_f32, 2_f32]]);
+    }
+    #[test]
     fn uninterleave_stereo() {
         let v = vec![0_f32, 3_f32, 1_f32, 4_f32, 2_f32, 5_f32];
+        let uninterleaved = uninterleave(v, 2);
+        assert!(uninterleaved.is_ok());
         assert_eq!(
-            uninterleave(v, 2),
+            uninterleaved.unwrap(),
             vec![vec![0_f32, 1_f32, 2_f32], vec![3_f32, 4_f32, 5_f32]]
         );
     }
 
     #[test]
-    #[should_panic]
-    fn interleave_multichannel() {
-        interleave(vec![vec![], vec![], vec![]]);
-    }
-
-    #[test]
-    #[should_panic]
     fn uninterleave_multichannel() {
-        uninterleave(vec![], 3);
+        assert!(uninterleave(vec![], 3).is_err());
     }
 }
