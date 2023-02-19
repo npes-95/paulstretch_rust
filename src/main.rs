@@ -8,9 +8,10 @@ use std::io::Write;
 #[derive(Parser, Debug)]
 #[clap(author, version, about)]
 struct Args {
-    in_name: String,
+    in_file: String,
 
-    out_name: String,
+    #[clap(short)]
+    out_file: Option<String>,
 
     #[clap(short, default_value_t = 8.0)]
     stretch_factor: f32,
@@ -45,14 +46,24 @@ fn print_progress(current: u32, total: u32) {
 
 fn main() {
     let args = Args::parse();
-    let wave = wav_helper::load(&args.in_name).unwrap();
+
+    let out_file = if let Some(out_file) = &args.out_file.as_deref() {
+        out_file.to_string()
+    } else {
+        args.in_file.replacen(".wav", "-stretched.wav", 1)
+    };
+
+    let wave = wav_helper::load(&args.in_file).unwrap();
 
     println!(
-        "loaded file (bit_depth: {}, sample_rate: {})",
-        wave.header.bit_depth, wave.header.sample_rate
+        "loaded {} (channels: {}, bit_depth: {}, sample_rate: {})",
+        &args.in_file, wave.header.channels, wave.header.bit_depth, wave.header.sample_rate
     );
 
-    println!("processing...");
+    println!(
+        "processing (stretch factor: {}, window size: {}s)",
+        args.stretch_factor, args.window_size_secs
+    );
 
     let stretched = paulstretch_multichannel(
         wave.data,
@@ -64,10 +75,10 @@ fn main() {
 
     println!("done!");
 
-    println!("exporting...");
+    println!("exporting {}", &out_file);
 
     wav_helper::export(
-        &args.out_name,
+        &out_file,
         wav_helper::Wave {
             header: wave.header,
             data: stretched,
