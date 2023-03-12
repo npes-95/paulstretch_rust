@@ -126,7 +126,7 @@ pub fn paulstretch(
     let mut scratch_forward = fft.make_scratch_vec();
     let mut scratch_inverse = ifft.make_scratch_vec();
     let fft_scale = 1_f32 / window_size as f32;
-    let fft_is_even = half_window_size % 2 == 0;
+    let spectrum_is_even = spectrum.len() % 2 == 0;
 
     // init rand
     let uniform = Uniform::new(0_f32, 2_f32 * PI);
@@ -165,10 +165,10 @@ pub fn paulstretch(
         });
 
         // realfft expects data in the form:
-        // [(X0r, 0), (X1r, X1i), (X2r, X2i), (X3r, 0)] for even
-        // [(X0r, 0), (X1r, X1i), (X2r, X2i), (X3r, X3i)] for odd
+        // [(X0r, 0), (X1r, X1i), (X2r, X2i), (X3r, 0)] for even len
+        // [(X0r, 0), (X1r, X1i), (X2r, X2i), (X3r, X3i)] for odd len
         spectrum[0].im = 0_f32;
-        if fft_is_even {
+        if spectrum_is_even {
             spectrum[half_window_size].im = 0_f32;
         }
 
