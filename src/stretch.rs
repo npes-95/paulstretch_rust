@@ -23,27 +23,16 @@ fn compute_window_size(window_size_secs: f32, sample_rate: u32) -> usize {
     }
 }
 
-fn compute_linspace(x0: f32, xend: f32, n: usize) -> Vec<f32> {
-    let dx = (xend - x0) / ((n - 1) as f32);
+fn compute_linspace(x0: f32, xn: f32, n: usize) -> Vec<f32> {
+    let dx = (xn - x0) / ((n - 1) as f32);
     (0..n).map(|i| x0 + i as f32 * dx).collect()
 }
 
-fn compute_hann(window_size: usize) -> Vec<f32> {
-    let hann = |i: f32| -> f32 {
-        let phase = i * 2_f32 * PI / (window_size - 1) as f32;
-        0.5 - phase.cos() * 0.5
-    };
-
-    (0..window_size).map(|i| hann(i as f32)).collect()
-}
-
-fn compute_inv_buf(window_size: usize) -> Vec<f32> {
-    let inv_sqrt2 = (1_f32 + 0.5_f32.sqrt()) * 0.5;
-    let inv = |i: f32| -> f32 {
-        let phase = i * 2_f32 * PI / (window_size / 2) as f32;
-        inv_sqrt2 - (1_f32 - inv_sqrt2) * phase.cos()
-    };
-    (0..window_size / 2).map(|i| inv(i as f32)).collect()
+fn compute_window_func(window_size: usize) -> Vec<f32> {
+    compute_linspace(-1_f32, 1_f32, window_size)
+        .iter()
+        .map(|i| (1_f32 - i.powf(2_f32)).powf(1.25))
+        .collect()
 }
 
 fn overlap_add(current: &Vec<f32>, prev: &Vec<f32>, added: &mut Vec<f32>) {
@@ -103,13 +92,11 @@ pub fn paulstretch(
     let half_window_size = window_size / 2;
     assert!(window_size >= 16);
 
-    let mut window = vec![0_f32; window_size];
-    let mut prev_window = vec![0_f32; window_size];
-    let mut out = vec![0_f32; half_window_size];
+    let mut cur_buffer = vec![0_f32; window_size];
+    let mut prev_buffer = vec![0_f32; window_size];
+    let mut out_buffer = vec![0_f32; half_window_size];
 
-    let hann = compute_hann(window_size);
-    let inv_buf = compute_inv_buf(window_size);
-    assert_eq!(inv_buf.len(), half_window_size);
+    let window = compute_window_func(window_size);
 
     // init loop control
     let mut start = 0_f32;
@@ -142,20 +129,20 @@ pub fn paulstretch(
         // grab window_size samples and pad with zeros if there aren't enough left
         let remaining = samples.len() - start as usize;
         if remaining > window_size {
-            window.copy_from_slice(&samples[(start as usize)..(start as usize + window_size)]);
+            cur_buffer.copy_from_slice(&samples[(start as usize)..(start as usize + window_size)]);
         } else {
-            window[remaining..].fill(0_f32);
-            window[..remaining].copy_from_slice(&samples[(start as usize)..]);
-            assert_eq!(window.last(), Some(&0_f32));
+            cur_buffer[remaining..].fill(0_f32);
+            cur_buffer[..remaining].copy_from_slice(&samples[(start as usize)..]);
+            assert_eq!(cur_buffer.last(), Some(&0_f32));
         }
 
-        // apply hann window
-        for (s, h) in window.iter_mut().zip(hann.iter()) {
-            *s *= *h;
+        // apply window function
+        for (s, w) in cur_buffer.iter_mut().zip(window.iter()) {
+            *s *= *w;
         }
 
         // get the amplitudes of the frequency components
-        fft.process_with_scratch(&mut window, &mut spectrum, &mut scratch_forward)
+        fft.process_with_scratch(&mut cur_buffer, &mut spectrum, &mut scratch_forward)
             .unwrap();
 
         //randomize the phases by multiplication with a random complex number with modulus=1
@@ -172,27 +159,23 @@ pub fn paulstretch(
             spectrum[half_window_size].im = 0_f32;
         }
 
-        ifft.process_with_scratch(&mut spectrum, &mut window, &mut scratch_inverse)
+        ifft.process_with_scratch(&mut spectrum, &mut cur_buffer, &mut scratch_inverse)
             .unwrap();
 
         // normalize fft output by scaling 1/len
-        window.iter_mut().for_each(|s| *s *= fft_scale);
+        cur_buffer.iter_mut().for_each(|s| *s *= fft_scale);
 
-        // apply hann window again
-        for (s, w) in window.iter_mut().zip(hann.iter()) {
+        // apply window function again
+        for (s, w) in cur_buffer.iter_mut().zip(window.iter()) {
             *s *= *w;
         }
 
-        overlap_add(&window, &prev_window, &mut out);
-        prev_window.copy_from_slice(&window.as_slice());
+        overlap_add(&cur_buffer, &prev_buffer, &mut out_buffer);
+        prev_buffer.copy_from_slice(&cur_buffer.as_slice());
 
-        // remove the resulting amplitude modulation
-        // (magic)
-        for (s, i) in out.iter_mut().zip(inv_buf.iter()) {
-            *s *= *i;
-        }
-
-        out.iter_mut().for_each(|s| *s = s.clamp(-1_f32, 1_f32));
+        out_buffer
+            .iter_mut()
+            .for_each(|s| *s = s.clamp(-1_f32, 1_f32));
 
         start += step;
 
@@ -200,7 +183,7 @@ pub fn paulstretch(
             return output;
         }
 
-        output.extend_from_slice(&out);
+        output.extend_from_slice(&out_buffer);
 
         iters += 1;
     }
@@ -250,19 +233,5 @@ mod tests {
         let mut added = vec![0_f32, 0_f32];
         overlap_add(&v1, &v2, &mut added);
         assert_eq!(added, vec![6_f32, 8_f32]);
-    }
-
-    #[test]
-    fn hann() {
-        let len = 16;
-        let hann = compute_hann(len);
-        assert_eq!(hann.len(), len);
-
-        for (i, w) in hann.iter().enumerate() {
-            assert_eq!(
-                *w,
-                0.5 * (1_f32 - (2_f32 * PI * i as f32 / (len - 1) as f32).cos())
-            );
-        }
     }
 }
